@@ -10,9 +10,13 @@
 #include <linux/miscdevice.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
+#include <linux/string.h>
 
 #define DEV_NAME "btn_count"
-#define OUT_MSG_LEN 256
+#define OUT_MSG_LEN 8
+
+static const char START[] = "start";
+static const char STOP[] = "stop";
 
 typedef struct btn_data {
     int gpio_pin;
@@ -24,9 +28,9 @@ typedef struct btn_data {
     int status;
 } btn_data_t;
 
-enum cnt_status {
-    STOP = 0,
-    START = 1, // start or reset counting
+enum status_t {
+    status_stop = 0,
+    status_start,
 };
 
 static btn_data_t btn;
@@ -56,62 +60,71 @@ static struct miscdevice btn_dev = {
 
 static int btn_open(struct inode *node, struct file * filp) {
     try_module_get(THIS_MODULE);
-    pr_info("%s dev opened\n", DEV_NAME);
+    printk("%s dev opened\n", DEV_NAME);
     return 0;
 }
 
 static int btn_release(struct inode *node, struct file *filp) {
     module_put(THIS_MODULE);
+    printk("%s close\n",DEV_NAME);
     return 0;
 }
 
 static ssize_t btn_write(struct file *filp, const char __user *buf, \
     size_t len, loff_t *offp) {
     int ret;
-    unsigned int rslt;
     ret = mutex_trylock(&btn.rdwr_mutx);
     if (!ret) {
         pr_warning("%s is busy\n", DEV_NAME);
         return -EBUSY;
     }
 
-    pr_info("%s btn_write: start writing; len: %d\n", DEV_NAME, len);
+    printk("%s btn_write: start writing; len: %d\n", DEV_NAME, len);
     //write status
     char tmp[len];
     memset(tmp, 0, len);
-    copy_from_user(tmp, buf, len);
+    ret = copy_from_user(tmp, buf, len);
     /*if (copy_from_user(tmp, buf, len)) {
         pr_err("%s copy_from_user fails\n", DEV_NAME);
         return -EFAULT;
     }*/
     tmp[len-1] = (tmp[len-1] != '\0')? '\0': tmp[len-1];
-    pr_info("%s buffer content: %s", DEV_NAME, tmp);
+    printk("%s buffer content: %s; cp ret: %d\n", DEV_NAME, tmp, ret);
 
-    ret = kstrtoint(tmp, 10, &rslt);
-    if (ret)
+    int cmp = strcmp(STOP,tmp);
+    if (cmp == 0) {
+        printk("%s stop counting\n", DEV_NAME);
+        btn.status = status_stop;
         goto finish;
-    /*ret = kstrtoint_from_user(buf, len, 10, &rslt);
-    if (ret) {
-        pr_err("%s kstrtoint_from_user fails\n", DEV_NAME);
-        return ret;
-    }*/
-
-    if (STOP == rslt) {
-        btn.status = STOP;
-        pr_info("%s stop counting\n", DEV_NAME);
-        btn_clean_irq();
-    } else if (START == rslt) {
-        gpio_direction_input(gpio_pin);
-        btn.status = START;
+    }
+    cmp = strcmp(START,tmp);
+    if (cmp == 0) {
+        printk("%s start/reset counting\n", DEV_NAME);
+        btn.status = status_start;
         btn.cnt = 0;
-        pr_info("%s start/reset counting\n", DEV_NAME);
+        goto finish;
+    }
+
+    pr_err("%s no such command: %s\n", DEV_NAME, tmp);
+
+#if 0
+    if (!strcmp(STOP,tmp)) {
+        btn.status = status_stop;
+        printk("%s stop counting\n", DEV_NAME);
+        btn_clean_irq();
+    } else if (!strcmp(START,tmp)) {
+        gpio_direction_input(gpio_pin);
+        btn.status = status_start;
+        btn.cnt = 0;
+        printk("%s start/reset counting\n", DEV_NAME);
         if (btn.irq < 0) {
             if (btn_setup_irq())
                 pr_err("%s btn_setup_irq fails\n", DEV_NAME);
         }
     } else {
-        pr_err("%s no such command: %d", DEV_NAME, rslt);
+        pr_err("%s no such command: %s\n", DEV_NAME, tmp);
     }
+#endif
 
 finish:
     mutex_unlock(&btn.rdwr_mutx);
@@ -120,16 +133,37 @@ finish:
 
 static ssize_t btn_read(struct file *filp, char __user *buf, \
     size_t len, loff_t *offp) {
-    pr_info("%s btn_read; btn.cnt: %lu", DEV_NAME, btn.cnt);
-    char out[OUT_MSG_LEN];
-    memset(out, 0, OUT_MSG_LEN);
-    snprintf(out, OUT_MSG_LEN, "%lu", btn.cnt);
-    long ret = copy_to_user(buf, out, OUT_MSG_LEN);
-    return OUT_MSG_LEN;
+    printk("%s btn_read; btn.cnt: %lu\n", DEV_NAME, btn.cnt);
+    ssize_t msg_len;
+    if (btn.status == status_start) {
+        char out[OUT_MSG_LEN];
+        memset(out, 0, OUT_MSG_LEN);
+        snprintf(out, OUT_MSG_LEN, "%lu\n", btn.cnt);
+        msg_len  = 0;
+        while (1) {
+            if (out[msg_len] == '\0'){
+                msg_len++;
+                break;
+            }
+            msg_len++;
+        }
+        if (*offp >= msg_len)
+            return 0;
+        copy_to_user(buf, out, msg_len);
+        (*offp) += msg_len;
+    } else {
+        char msg[] = "-1\n";
+        msg_len = sizeof(msg);
+        if (*offp >= msg_len)
+            return 0;
+        copy_to_user(buf, msg, msg_len);
+        (*offp) += msg_len;
+    }
+    return msg_len;
 }
 
 static irqreturn_t btn_irq_handler(int irq, void *data) {
-    if (btn.status != START)
+    if (btn.status != status_start)
         goto finish;
 
     int val;
@@ -137,10 +171,10 @@ static irqreturn_t btn_irq_handler(int irq, void *data) {
     val = gpio_get_value(btn.gpio_pin);
     if (val && btn.pressed) {
         btn.cnt++;
-        pr_info("%s count plus one; cnt=%lu\n", DEV_NAME, btn.cnt);
+        printk("%s count plus one; cnt=%lu\n", DEV_NAME, btn.cnt);
         btn.pressed = false;
     } else if (!val && !btn.pressed) {
-        pr_info("%s button is pressing\n", DEV_NAME);
+        printk("%s button is pressing\n", DEV_NAME);
         btn.pressed = true;
     } else {
         pr_warning("%s we should not be here...\n", DEV_NAME);
@@ -158,7 +192,7 @@ static int btn_setup_irq(void) {
         //gpio_free(gpio_pin);
         return -EINVAL;
     }
-    pr_info("%s gpio irq no: %d\n", DEV_NAME, irq);
+    printk("%s gpio irq no: %d\n", DEV_NAME, irq);
     ret = request_irq(irq, btn_irq_handler, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
         DEV_NAME, (void*)&btn_dev);
     if (ret) {
@@ -201,7 +235,7 @@ static int __init btn_count_init(void) {
     if (ret)
         pr_err("%s misc_register fails\n", DEV_NAME);
     else
-        pr_info("%s misc_register success\n", DEV_NAME);
+        printk("%s misc_register success\n", DEV_NAME);
 
     return 0;
 }
