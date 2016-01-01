@@ -23,7 +23,6 @@ typedef struct btn_data {
     int irq;
     struct mutex rdwr_mutx;
     bool pressed;
-    //bool release;
     unsigned long cnt;
     int status;
 } btn_data_t;
@@ -49,7 +48,6 @@ static const struct file_operations btn_fops = {
     .write = btn_write,
     .open = btn_open,
     .release = btn_release,
-    /*.llseek = no_llseek,*/
 };
 
 static struct miscdevice btn_dev = {
@@ -84,10 +82,11 @@ static ssize_t btn_write(struct file *filp, const char __user *buf, \
     char tmp[len];
     memset(tmp, 0, len);
     ret = copy_from_user(tmp, buf, len);
-    /*if (copy_from_user(tmp, buf, len)) {
+    if (ret) {
         pr_err("%s copy_from_user fails\n", DEV_NAME);
-        return -EFAULT;
-    }*/
+        ret = -EFAULT;
+        goto error;
+    }
     tmp[len-1] = (tmp[len-1] != '\0')? '\0': tmp[len-1];
     printk("%s buffer content: %s; cp ret: %d\n", DEV_NAME, tmp, ret);
 
@@ -100,41 +99,31 @@ static ssize_t btn_write(struct file *filp, const char __user *buf, \
     }
     cmp = strcmp(START,tmp);
     if (cmp == 0) {
+        if (btn.irq < 0) {
+            ret = btn_setup_irq();
+            if (ret) {
+                pr_err("%s btn_setup_irq fails\n", DEV_NAME);
+                ret = -EINVAL;
+                goto error;
+            }
+        }
         printk("%s start/reset counting\n", DEV_NAME);
         btn.status = status_start;
         btn.cnt = 0;
-        if (btn.irq < 0) {
-            ret = btn_setup_irq();
-            if (ret)
-                pr_err("%s btn_setup_irq fails\n", DEV_NAME);
-        }
         goto finish;
     }
 
     pr_err("%s no such command: %s\n", DEV_NAME, tmp);
-
-#if 0
-    if (!strcmp(STOP,tmp)) {
-        btn.status = status_stop;
-        printk("%s stop counting\n", DEV_NAME);
-        btn_clean_irq();
-    } else if (!strcmp(START,tmp)) {
-        gpio_direction_input(gpio_pin);
-        btn.status = status_start;
-        btn.cnt = 0;
-        printk("%s start/reset counting\n", DEV_NAME);
-        if (btn.irq < 0) {
-            if (btn_setup_irq())
-                pr_err("%s btn_setup_irq fails\n", DEV_NAME);
-        }
-    } else {
-        pr_err("%s no such command: %s\n", DEV_NAME, tmp);
-    }
-#endif
+    ret = -EINVAL;
+    goto error;
 
 finish:
     mutex_unlock(&btn.rdwr_mutx);
     return len;
+
+error:
+    mutex_unlock(&btn.rdwr_mutx);
+    return ret;
 }
 
 static ssize_t btn_read(struct file *filp, char __user *buf, \
@@ -197,7 +186,6 @@ static int btn_setup_irq(void) {
     irq = gpio_to_irq(gpio_pin);
     if (irq < 0) {
         pr_err("%s GPIO %d has no interrupt\n", DEV_NAME, gpio_pin);
-        //gpio_free(gpio_pin);
         return -EINVAL;
     }
     printk("%s gpio irq no: %d\n", DEV_NAME, irq);
@@ -236,7 +224,7 @@ static int __init btn_count_init(void) {
     btn.cnt = 0;
     btn.status = STOP;
     btn.pressed = false;
-    //btn.release = false;
+
     mutex_init(&btn.rdwr_mutx);
 
     ret = misc_register(&btn_dev);
