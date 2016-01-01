@@ -95,6 +95,7 @@ static ssize_t btn_write(struct file *filp, const char __user *buf, \
     if (cmp == 0) {
         printk("%s stop counting\n", DEV_NAME);
         btn.status = status_stop;
+        btn_clean_irq();
         goto finish;
     }
     cmp = strcmp(START,tmp);
@@ -102,6 +103,11 @@ static ssize_t btn_write(struct file *filp, const char __user *buf, \
         printk("%s start/reset counting\n", DEV_NAME);
         btn.status = status_start;
         btn.cnt = 0;
+        if (btn.irq < 0) {
+            ret = btn_setup_irq();
+            if (ret)
+                pr_err("%s btn_setup_irq fails\n", DEV_NAME);
+        }
         goto finish;
     }
 
@@ -169,6 +175,8 @@ static irqreturn_t btn_irq_handler(int irq, void *data) {
     int val;
     // val = 1 for released button; val = 0 for pressing button
     val = gpio_get_value(btn.gpio_pin);
+    printk("%s gpio_get_value: %d\n", DEV_NAME, val);
+
     if (val && btn.pressed) {
         btn.cnt++;
         printk("%s count plus one; cnt=%lu\n", DEV_NAME, btn.cnt);
