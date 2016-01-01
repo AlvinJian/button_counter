@@ -242,7 +242,7 @@ static int __init btn_count_init(void) {
     btn.gpio_pin = gpio_pin;
     btn.irq = -1;
     btn.cnt = 0;
-    btn.status = STOP;
+    btn.status = status_stop;
     btn.pressed = false;
 
     mutex_init(&btn.rdwr_mutx);
