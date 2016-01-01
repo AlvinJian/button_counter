@@ -33,7 +33,7 @@
 #include <linux/string.h>
 
 #define DEV_NAME "btn_count"
-#define OUT_MSG_LEN 8
+#define OUT_MSG_LEN 16
 
 static const char START[] = "start";
 static const char STOP[] = "stop";
