@@ -154,21 +154,14 @@ static ssize_t btn_read(struct file *filp, char __user *buf, \
         char out[OUT_MSG_LEN];
         memset(out, 0, OUT_MSG_LEN);
         snprintf(out, OUT_MSG_LEN, "%lu\n", btn.cnt);
-        msg_len  = 0;
-        while (1) {
-            if (out[msg_len] == '\0'){
-                msg_len++;
-                break;
-            }
-            msg_len++;
-        }
+        msg_len  = strlen(out);
         if (*offp >= msg_len)
             return 0;
         copy_to_user(buf, out, msg_len);
         (*offp) += msg_len;
     } else {
         char msg[] = "-1\n";
-        msg_len = sizeof(msg);
+        msg_len = strlen(msg);
         if (*offp >= msg_len)
             return 0;
         copy_to_user(buf, msg, msg_len);
